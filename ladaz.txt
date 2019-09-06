@@ -1,0 +1,192 @@
+Alter Proc dbo.P_I_lazadamasterInSales '8464148531948'  
+
+	@ordert_id varchar(100)    
+
+	As Begin    
+
+	------Transaction----------  
+
+	SET NOCOUNT ON;                      
+
+	DECLARE @trancount int;                      
+
+	SET @trancount = @@trancount;                        
+
+	BEGIN TRY                      
+
+	  IF @trancount = 0                      
+
+	  BEGIN TRANSACTION                           
+
+	  ELSE                      
+
+		SAVE TRANSACTION P_I_lazadamasterInSales;   
+
+
+
+	Declare @cust_name varchar(100),@phone varchar(100),@address varchar(300),    
+
+	@sales_sk int,@sales_channel_sk int,@customer_sk int,@payment_method_sk int,@total_sales_amt money,@sales_channel_fee money,    
+
+	@payment_method_fee money,@net_sales_amt money,@delivery_method int    
+
+	  
+
+	If Exists(Select delivery_method from dbo.t_lazada_master where delivery_method like '%NinjaVan%')    
+
+	 Set @delivery_method=6    
+
+	Else    
+
+	 Set @delivery_method=6    
+
+
+
+	Select @total_sales_amt=(total_sales_amt +delivery_method_fee) From dbo.t_lazada_master where order_id=@ordert_id    
+
+	Select @sales_channel_sk=sales_channel_sk,@sales_channel_fee=sales_channel_chares_percentage From t_sales_channel where sales_channel_name like '%Lazada%'    
+
+	Select @payment_method_sk=payment_method_sk,@payment_method_fee=payment_method_fee_percentage from t_payment_method where payment_method_name like '%Bank Transfer%'    
+
+	set @net_sales_amt=@total_sales_amt-(@sales_channel_fee+@payment_method_fee)    
+
+	   
+
+	 
+
+	---Insertion in t_customer Table    
+
+	Insert into dbo.t_customer(customer_name,address_text,contact_no)    
+
+	Select cust_name,cust_address,cust_phone From dbo.t_lazada_master where order_id=@ordert_id     
+
+	Set @customer_sk=ident_current('dbo.t_customer')    
+
+	   
+
+	---------Insertion in t_Sales Table     
+
+	Insert into dbo.t_sales (sales_channel_sk,customer_sk,payment_method_sk,sales_date,total_sales_qty,total_sales_amt,    
+
+	sales_channel_fee,payment_method_fee,net_sales_amt,comments,sales_invoice_number,delivery_method,delivery_method_fee,    
+
+	is_shipped,Item_tracking_number,staff_sk,insert_date,order_id)    
+
+	 
+
+	Select @sales_channel_sk,@customer_sk,@payment_method_sk,sales_date,total_sales_qty,@total_sales_amt,    
+
+	@sales_channel_fee,@payment_method_fee,@net_sales_amt,'Auto','LZ_'+sales_invoice_number,@delivery_method,delivery_method_fee,    
+
+	'N',Item_tracking_number,1,GetDate(),@ordert_id    
+
+	from dbo.t_lazada_master where order_id=@ordert_id     
+
+	Set @sales_sk=ident_current('dbo.t_sales')    
+
+	Update dbo.t_lazada_master set statuss='Success' where order_id=@ordert_id     
+
+	------------------------------------------------------------------------ 
+
+	 
+
+	-----------Insertion in t_SalesItem using cursor    
+
+	DECLARE @qty_sold int,@item_price money,@sku_item varchar(400)    
+
+	DECLARE item_Cursor CURSOR FOR        
+
+	Select qty_sold,item_price,sku_item From dbo.t_lazada_master_item where order_id=@ordert_id    
+
+	OPEN item_Cursor;     
+
+	FETCH NEXT FROM item_Cursor    
+
+	INTO @qty_sold,@item_price,@sku_item    
+
+	WHILE @@FETCH_STATUS = 0        
+
+	BEGIN    
+
+	  
+
+	Declare @item_sk int,@supplier_lot_sk int,@price_per_item money    
+
+	Select @item_sk=ims_item_sk From dbo.t_ladaza_item_lookup where lazada_sku=@sku_item    
+
+	Select top 1 @supplier_lot_sk=supplier_lot_sk,@price_per_item=price_per_item From t_supplier_lot_item     
+
+	where item_sk=2239 And qty_remaining>0    
+
+	 
+
+	---------Insertion in t_sales_item table    
+
+	--begin try
+
+	Insert into dbo.t_sales_item(sales_sk,supplier_lot_sk,item_sk,qry_sold,price,comments,price_per_item)    
+
+	values(@sales_sk,@supplier_lot_sk,@item_sk,@qty_sold,@item_price,'Auto',@price_per_item)    
+
+	--end try
+
+	--begin catch
+
+	--Update dbo.t_lazada_master set statuss='Fail',reason=ERROR_MESSAGE() where order_id=@ordert_id 
+
+	--end catch
+
+	----------------------------------------    
+
+	FETCH NEXT FROM item_Cursor INTO @qty_sold,@item_price,@sku_item    
+
+	End    
+
+	CLOSE item_Cursor;        
+
+	DEALLOCATE item_Cursor;    
+
+	-----------------------------------------------------------    
+
+	    
+
+	lbexit:                      
+
+	  IF @trancount = 0 
+
+	  COMMIT;                      
+
+	END TRY                      
+
+	BEGIN CATCH                      
+	
+	 
+	CLOSE item_Cursor;        
+	DEALLOCATE item_Cursor;
+
+	DECLARE @error int,@message varchar(4000),@xstate int;                      
+
+	SELECT                      
+
+	  @error = ERROR_NUMBER(),                      
+
+	  @message = ERROR_MESSAGE(),                      
+
+	  @xstate = XACT_STATE();                      
+
+	IF @xstate = -1                      
+
+	  ROLLBACK;                      
+
+	IF @xstate = 1 AND @trancount = 0                      
+
+	  ROLLBACK                      
+
+	IF @xstate = 1 AND @trancount > 0                      
+
+	  ROLLBACK TRANSACTION P_I_lazadamasterInSales                   
+	 Update dbo.t_lazada_master set statuss='Fail',reason=@message where order_id=@ordert_id
+	--RAISERROR ('P_I_lazadamasterInSales : %d: %s', 16, 1, @error, @message);   
+
+	END CATCH    
+
